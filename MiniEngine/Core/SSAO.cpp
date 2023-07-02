@@ -606,8 +606,12 @@ void SSAO::Render( GraphicsContext& GfxContext, const float* ProjMat, float Near
         struct EntryRecord
         {
             XMUINT2 gridSize; // : SV_DispatchGrid;
+            int32_t hierarchyDepth;
         };
-        EntryRecord inputData[1] = { XMUINT2{ g_DepthTiled2.GetWidth(), g_DepthTiled2.GetHeight() } };
+        EntryRecord inputData[1] = {
+            XMUINT2{ g_DepthTiled2.GetWidth(), g_DepthTiled2.GetHeight() },
+            HierarchyDepth,
+        };
 
         // Spawn work
         D3D12_DISPATCH_GRAPH_DESC DSDesc = {};
