@@ -286,6 +286,30 @@ D3D12_GPU_DESCRIPTOR_HANDLE DynamicDescriptorHeap::UploadDirect( D3D12_CPU_DESCR
     return DestHandle;
 }
 
+D3D12_GPU_DESCRIPTOR_HANDLE DynamicDescriptorHeap::UploadDirect(const D3D12_CPU_DESCRIPTOR_HANDLE* pHandles, uint32_t NumHandles)
+{
+    if (!HasSpace(NumHandles))
+    {
+        RetireCurrentHeap();
+        UnbindAllValid();
+    }
+
+    m_OwningContext.SetDescriptorHeap(m_DescriptorType, GetHeapPointer());
+
+    DescriptorHandle DestHandle = m_FirstDescriptor + m_CurrentOffset * m_DescriptorSize;
+    m_CurrentOffset += NumHandles;
+
+    DescriptorHandle DestHandleStart = DestHandle;
+    
+    for (uint32_t i = 0; i < NumHandles; i++)
+    {
+        g_Device->CopyDescriptorsSimple(1, DestHandle, pHandles[i], m_DescriptorType);
+        DestHandle += m_DescriptorSize;
+    }
+
+    return DestHandleStart;
+}
+
 void DynamicDescriptorHeap::DescriptorHandleCache::UnbindAllValid()
 {
     m_StaleRootParamsBitMap = 0;

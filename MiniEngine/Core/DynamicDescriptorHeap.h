@@ -53,6 +53,7 @@ public:
 
     // Bypass the cache and upload directly to the shader-visible heap
     D3D12_GPU_DESCRIPTOR_HANDLE UploadDirect( D3D12_CPU_DESCRIPTOR_HANDLE Handles );
+    D3D12_GPU_DESCRIPTOR_HANDLE UploadDirect( const D3D12_CPU_DESCRIPTOR_HANDLE* pHandles, uint32_t NumHandles );
 
     // Deduce cache layout needed to support the descriptor tables needed by the root signature.
     void ParseGraphicsRootSignature( const RootSignature& RootSig )

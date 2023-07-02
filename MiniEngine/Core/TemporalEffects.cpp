@@ -121,6 +121,11 @@ uint32_t TemporalEffects::GetFrameIndexMod2( void )
     return s_FrameIndexMod2;
 }
 
+uint32_t TemporalEffects::GetFrameIndex( void )
+{
+    return s_FrameIndex;
+}
+
 void TemporalEffects::GetJitterOffset( float& JitterX, float& JitterY )
 {
     JitterX = s_JitterX;
