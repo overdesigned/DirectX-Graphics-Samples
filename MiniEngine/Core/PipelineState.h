@@ -113,3 +113,45 @@ private:
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC m_PSODesc;
 };
+
+class GWGPso
+{
+    friend class CommandContext;
+public:
+    GWGPso(const wchar_t* Name = L"Unnamed GWG PSO");
+
+    void AddLibrary(const std::wstring& Name, const D3D12_SHADER_BYTECODE& Bianry)
+    {
+        m_Libraries[Name] = Bianry;
+    }
+
+    void AddLocalRootSignature(const std::wstring& LibName, const std::wstring& RootSignatureName);
+
+    void AddNodeToLocalRootSignatureAssociation(const std::wstring& RootSignatureName, const std::wstring& NodeName)
+    {
+        m_NodeToLocalRootSignatureAssociations[NodeName] = RootSignatureName;
+    }
+
+    void Finalize(const wchar_t* WorkGraphName);
+
+    ID3D12StateObject* GetStateObject() const { return m_StateObject.Get(); }
+
+    D3D12_PROGRAM_IDENTIFIER GetWorkGraph() const { return m_hWorkGraph; }
+
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE GetBackingMemory() const { return m_BackingMemory; }
+
+private:
+    const wchar_t* m_Name = {};
+    const RootSignature* m_GlobalRootSignature = {};
+    std::map<std::wstring, Microsoft::WRL::ComPtr<ID3D12RootSignature>> m_LocalRootSignatures;
+
+    Microsoft::WRL::ComPtr<ID3D12StateObject> m_StateObject;
+
+    std::map<std::wstring, D3D12_SHADER_BYTECODE> m_Libraries;
+    std::map<std::wstring, std::wstring> m_NodeToLocalRootSignatureAssociations;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_BackingResource = {};
+    D3D12_GPU_VIRTUAL_ADDRESS_RANGE m_BackingMemory = {};
+    D3D12_PROGRAM_IDENTIFIER m_hWorkGraph = {};
+    D3D12_WORK_GRAPH_MEMORY_REQUIREMENTS m_MemReqs = {};
+};

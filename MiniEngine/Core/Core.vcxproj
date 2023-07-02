@@ -198,6 +198,9 @@
     <FxCompile Include="Shaders\AoBlurUpsampleCS.hlsl" />
     <FxCompile Include="Shaders\AoBlurUpsamplePreMinBlendOutCS.hlsl" />
     <FxCompile Include="Shaders\AoBlurUpsamplePreMinCS.hlsl" />
+    <Text Include="Shaders\AoGwG.hlsl">
+      <FileType>Document</FileType>
+    </Text>
     <FxCompile Include="Shaders\AoPrepareDepthBuffers1CS.hlsl" />
     <FxCompile Include="Shaders\AoPrepareDepthBuffers2CS.hlsl" />
     <FxCompile Include="Shaders\AoRender1CS.hlsl" />

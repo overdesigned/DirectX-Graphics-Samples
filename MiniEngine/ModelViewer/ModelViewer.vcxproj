@@ -361,6 +361,27 @@
       <AdditionalDependencies>zlibstatic.lib;DirectXMesh.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalDependencies Condition="'$(Platform)'=='x64'">DirectXTex.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">copy $(ProjectDir)..\Core\Shaders\AoGwG.hlsl $(OutDir)
+copy $(ProjectDir)..\Core\Shaders\SSAORS.hlsli $(OutDir)
+copy $(ProjectDir)..\Core\Shaders\AoPrepareDepthBuffers1CS.hlsl $(OutDir)
+copy $(ProjectDir)..\Core\Shaders\AoPrepareDepthBuffers2CS.hlsl $(OutDir)
+</Command>
+    </PostBuildEvent>
+    <PostBuildEvent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">copy $(ProjectDir)..\Core\Shaders\AoGwG.hlsl $(OutDir)
+copy $(ProjectDir)..\Core\Shaders\SSAORS.hlsli $(OutDir)
+copy $(ProjectDir)..\Core\Shaders\AoPrepareDepthBuffers1CS.hlsl $(OutDir)
+copy $(ProjectDir)..\Core\Shaders\AoPrepareDepthBuffers2CS.hlsl $(OutDir)
+</Command>
+    </PostBuildEvent>
+    <PostBuildEvent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">copy $(ProjectDir)..\Core\Shaders\AoGwG.hlsl $(OutDir)
+copy $(ProjectDir)..\Core\Shaders\SSAORS.hlsli $(OutDir)
+copy $(ProjectDir)..\Core\Shaders\AoPrepareDepthBuffers1CS.hlsl $(OutDir)
+copy $(ProjectDir)..\Core\Shaders\AoPrepareDepthBuffers2CS.hlsl $(OutDir)
+</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ImportGroup Label="ExtensionTargets">
     <Import Project="..\..\Packages\zlib-msvc-x64.1.2.11.8900\build\native\zlib-msvc-x64.targets" Condition="Exists('..\..\Packages\zlib-msvc-x64.1.2.11.8900\build\native\zlib-msvc-x64.targets')" />

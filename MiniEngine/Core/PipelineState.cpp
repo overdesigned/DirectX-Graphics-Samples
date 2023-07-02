@@ -203,3 +203,87 @@ ComputePSO::ComputePSO(const wchar_t* Name)
     ZeroMemory(&m_PSODesc, sizeof(m_PSODesc));
     m_PSODesc.NodeMask = 1;
 }
+
+GWGPso::GWGPso(const wchar_t* Name)
+    : m_Name(Name)
+{
+}
+
+void GWGPso::AddLocalRootSignature(const std::wstring& LibName, const std::wstring& RootSignatureName)
+{
+    ASSERT(m_LocalRootSignatures.find(RootSignatureName) == m_LocalRootSignatures.end());
+
+    ComPtr<ID3D12DeviceExperimental> spDevice;
+    ComPtr<ID3D12Device>(g_Device).As(&spDevice);
+
+    auto& libCode = m_Libraries[LibName];
+
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> pRootSig;
+
+    ASSERT_SUCCEEDED(spDevice->CreateRootSignatureFromSubobjectInLibrary(
+        0, libCode.pShaderBytecode, libCode.BytecodeLength, RootSignatureName.c_str(), IID_PPV_ARGS(&pRootSig)));
+
+    m_LocalRootSignatures[RootSignatureName] = pRootSig;
+}
+
+void GWGPso::Finalize(const wchar_t* workGraphName)
+{
+    ComPtr<ID3D12DeviceExperimental> spDevice;
+    ComPtr<ID3D12Device>(g_Device).As(&spDevice);
+
+    CD3DX12_STATE_OBJECT_DESC SO(D3D12_STATE_OBJECT_TYPE_EXECUTABLE);
+
+    for (auto& libCode : m_Libraries)
+    {
+        auto pLib = SO.CreateSubobject<CD3DX12_DXIL_LIBRARY_SUBOBJECT>();
+        pLib->SetDXILLibrary(&libCode.second);
+    }
+
+    auto pWG = SO.CreateSubobject<CD3DX12_WORK_GRAPH_SUBOBJECT>();
+    pWG->IncludeAllAvailableNodes(); // Auto populate the graph
+    pWG->SetProgramName(workGraphName);
+
+    std::map<std::wstring, const CD3DX12_LOCAL_ROOT_SIGNATURE_SUBOBJECT*> localRootSigSubObjs;
+
+    for (auto& localRsIter : m_LocalRootSignatures)
+    {
+        auto pLocalRootSignature = SO.CreateSubobject<CD3DX12_LOCAL_ROOT_SIGNATURE_SUBOBJECT>();
+        pLocalRootSignature->SetRootSignature(localRsIter.second.Get());
+
+        localRootSigSubObjs[localRsIter.first] = pLocalRootSignature;
+    }
+
+    for (auto& nodeToLocalRSAssociation : m_NodeToLocalRootSignatureAssociations)
+    {
+        auto associationSubObj = SO.CreateSubobject<CD3DX12_SUBOBJECT_TO_EXPORTS_ASSOCIATION_SUBOBJECT>();
+        associationSubObj->AddExport(nodeToLocalRSAssociation.first.c_str());
+        associationSubObj->SetSubobjectToAssociate(*localRootSigSubObjs[nodeToLocalRSAssociation.second]);
+    }
+
+    ASSERT_SUCCEEDED(spDevice->CreateStateObject(SO, IID_PPV_ARGS(&m_StateObject)));
+
+    ComPtr<ID3D12StateObjectProperties1> spSOProps;
+    m_StateObject.As(&spSOProps);
+    m_hWorkGraph = spSOProps->GetProgramIdentifier(workGraphName);
+
+    ComPtr<ID3D12WorkGraphProperties> spWGProps;
+    m_StateObject.As(&spWGProps);
+    UINT WorkGraphIndex = spWGProps->GetWorkGraphIndex(workGraphName);
+
+    spWGProps->GetWorkGraphMemoryRequirements(WorkGraphIndex, &m_MemReqs);
+
+    CD3DX12_RESOURCE_DESC rd = CD3DX12_RESOURCE_DESC::Buffer(m_MemReqs.MaxSizeInBytes);
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    CD3DX12_HEAP_PROPERTIES hp(D3D12_HEAP_TYPE_DEFAULT);
+
+    ASSERT_SUCCEEDED(g_Device->CreateCommittedResource(
+        &hp,
+        D3D12_HEAP_FLAG_NONE,
+        &rd,
+        D3D12_RESOURCE_STATE_COMMON,
+        NULL,
+        IID_PPV_ARGS(&m_BackingResource)));
+
+    m_BackingMemory.SizeInBytes = m_MemReqs.MaxSizeInBytes;
+    m_BackingMemory.StartAddress = m_BackingResource->GetGPUVirtualAddress();
+}

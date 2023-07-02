@@ -674,4 +674,9 @@
       <UniqueIdentifier>{c5df3e3a-73f5-4b5b-8688-112163941bea}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="Shaders\AoGwG.hlsl">
+      <Filter>Shaders</Filter>
+    </Text>
+  </ItemGroup>
 </Project>
