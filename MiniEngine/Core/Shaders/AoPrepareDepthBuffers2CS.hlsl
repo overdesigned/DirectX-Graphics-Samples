@@ -13,19 +13,31 @@
 
 #include "SSAORS.hlsli"
 
+
+#ifndef GWG_GLOBALLYCOHERENT
+#define GWG_GLOBALLYCOHERENT
+#endif
+
+#ifndef COMPILING_FOR_WORKGRAPH
 Texture2D<float> DS4x : register(t0);
-RWTexture2D<float> DS8x : register(u0);
-RWTexture2DArray<float> DS8xAtlas : register(u1);
-RWTexture2D<float> DS16x : register(u2);
-RWTexture2DArray<float> DS16xAtlas : register(u3);
+#else
+GWG_GLOBALLYCOHERENT RWTexture2D<float> DS4x : register(u4);
+#endif
+
+GWG_GLOBALLYCOHERENT RWTexture2D<float> DS8x : register(u0);
+GWG_GLOBALLYCOHERENT RWTexture2DArray<float> DS8xAtlas : register(u1);
+GWG_GLOBALLYCOHERENT RWTexture2D<float> DS16x : register(u2);
+GWG_GLOBALLYCOHERENT RWTexture2DArray<float> DS16xAtlas : register(u3);
 
 cbuffer CB0 : register(b0)
 {
     float2 InvSourceDimension;
 }
 
+#ifndef COMPILING_FOR_WORKGRAPH
 [RootSignature(SSAO_RootSig)]
 [numthreads( 8, 8, 1 )]
+#endif
 void main( uint3 Gid : SV_GroupID, uint GI : SV_GroupIndex, uint3 GTid : SV_GroupThreadID, uint3 DTid : SV_DispatchThreadID )
 {
     float m1 = DS4x[DTid.xy << 1];

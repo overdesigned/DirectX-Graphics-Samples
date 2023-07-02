@@ -13,11 +13,15 @@
 
 #include "SSAORS.hlsli"
 
-RWTexture2D<float> LinearZ : register(u0);
-RWTexture2D<float2> DS2x : register(u1);
-RWTexture2DArray<float> DS2xAtlas : register(u2);
-RWTexture2D<float2> DS4x : register(u3);
-RWTexture2DArray<float> DS4xAtlas : register(u4);
+#ifndef GWG_GLOBALLYCOHERENT
+#define GWG_GLOBALLYCOHERENT
+#endif
+
+GWG_GLOBALLYCOHERENT RWTexture2D<unorm float> LinearZ : register(u0);
+GWG_GLOBALLYCOHERENT RWTexture2D<float> DS2x : register(u1);
+GWG_GLOBALLYCOHERENT RWTexture2DArray<float> DS2xAtlas : register(u2);
+GWG_GLOBALLYCOHERENT RWTexture2D<float> DS4x : register(u3);
+GWG_GLOBALLYCOHERENT RWTexture2DArray<float> DS4xAtlas : register(u4);
 cbuffer CB0 : register(b0)
 {
     float ZMagic;
@@ -35,8 +39,10 @@ float Linearize( uint2 st )
 
 groupshared float g_CacheW[256];
 
+#ifndef COMPILING_FOR_WORKGRAPH
 [RootSignature(SSAO_RootSig)]
 [numthreads( 8, 8, 1 )]
+#endif
 void main( uint3 Gid : SV_GroupID, uint GI : SV_GroupIndex, uint3 GTid : SV_GroupThreadID, uint3 DTid : SV_DispatchThreadID )
 {
     uint2 startST = Gid.xy << 4 | GTid.xy;
