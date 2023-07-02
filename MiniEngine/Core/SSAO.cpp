@@ -18,6 +18,7 @@
 #include "CommandContext.h"
 #include "Camera.h"
 #include "TemporalEffects.h"
+#include "UploadBuffer.h"
 
 #include "CompiledShaders/AoPrepareDepthBuffers1CS.h"
 #include "CompiledShaders/AoPrepareDepthBuffers2CS.h"
@@ -30,8 +31,138 @@
 #include "CompiledShaders/AoBlurUpsampleCS.h"
 #include "CompiledShaders/AoBlurUpsamplePreMinCS.h"
 
+#include "dxcapi.h"
+#include <atlbase.h>
+
 using namespace Graphics;
 using namespace Math;
+
+namespace
+{
+#define PRINT OutputDebugStringA
+
+    HRESULT CompileDxilLibraryFromFile(
+        _In_ LPCWSTR pFile,
+        _In_ LPCWSTR pTarget,
+        _In_reads_(cDefines) DxcDefine* pDefines,
+        _In_ UINT cDefines,
+        _Out_ ID3DBlob** ppCode)
+    {
+        HRESULT hr = S_OK;
+        *ppCode = nullptr;
+
+        static HMODULE s_hmod = 0;
+        static DxcCreateInstanceProc s_pDxcCreateInstanceProc = nullptr;
+        if (s_hmod == 0)
+        {
+            s_hmod = LoadLibrary(L"dxcompiler.dll");
+            if (s_hmod == 0)
+            {
+                PRINT("dxcompiler.dll missing or wrong architecture");
+                return E_FAIL;
+            }
+
+            if (s_pDxcCreateInstanceProc == nullptr)
+            {
+                s_pDxcCreateInstanceProc = (DxcCreateInstanceProc)GetProcAddress(s_hmod, "DxcCreateInstance");
+                if (s_pDxcCreateInstanceProc == nullptr)
+                {
+                    PRINT("Unable to find dxcompiler!DxcCreateInstance");
+                    return E_FAIL;
+                }
+            }
+        }
+
+        CComPtr<IDxcCompiler> compiler;
+        CComPtr<IDxcLibrary> library;
+        CComPtr<IDxcBlobEncoding> source;
+        CComPtr<IDxcOperationResult> operationResult;
+        CComPtr<IDxcIncludeHandler> includeHandler;
+        hr = s_pDxcCreateInstanceProc(CLSID_DxcLibrary, __uuidof(IDxcLibrary), reinterpret_cast<LPVOID*>(&library));
+        if (FAILED(hr))
+        {
+            PRINT("Failed to instantiate compiler.");
+            return hr;
+        }
+
+        struct CwdSetter
+        {
+            WCHAR oldCwdBuf[MAX_PATH];
+            WCHAR execPath[MAX_PATH];
+
+            CwdSetter()
+            {
+                GetModuleFileNameW(NULL, execPath, MAX_PATH);
+
+                WCHAR* dirEnd = wcsrchr(execPath, L'\\');
+                dirEnd[1] = L'\0';
+
+                GetCurrentDirectory(_countof(oldCwdBuf), oldCwdBuf);
+                SetCurrentDirectory(execPath);
+            }
+
+            ~CwdSetter()
+            {
+                SetCurrentDirectory(oldCwdBuf);
+            }
+        } cwdSetter;
+
+        HRESULT createBlobHr = library->CreateBlobFromFile(pFile, nullptr, &source);
+        if (createBlobHr != S_OK)
+        {
+            PRINT("Create Blob From File Failed - perhaps file is missing?");
+            return E_FAIL;
+        }
+
+        hr = library->CreateIncludeHandler(&includeHandler);
+        if (FAILED(hr))
+        {
+            PRINT("Failed to create include handler.");
+            return hr;
+        }
+        hr = s_pDxcCreateInstanceProc(CLSID_DxcCompiler, __uuidof(IDxcCompiler), reinterpret_cast<LPVOID*>(&compiler));
+        if (FAILED(hr))
+        {
+            PRINT("Failed to instantiate compiler.");
+            return hr;
+        }
+
+        LPCWSTR args[] = { L"" };
+        UINT cArgs = 0;
+        hr = compiler->Compile(
+            source,
+            nullptr,
+            nullptr,
+            pTarget,
+            args, cArgs,
+            pDefines, cDefines,
+            includeHandler,
+            &operationResult);
+        if (FAILED(hr))
+        {
+            PRINT("Failed to compile.");
+            return hr;
+        }
+
+        operationResult->GetStatus(&hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = operationResult->GetResult((IDxcBlob**)ppCode);
+            if (FAILED(hr))
+            {
+                PRINT("Failed to retrieve compiled code.");
+            }
+        }
+        CComPtr<IDxcBlobEncoding> pErrors;
+        if (SUCCEEDED(operationResult->GetErrorBuffer(&pErrors)))
+        {
+            PRINT("For preview, ignore any signing warnings below; dxil.dll signing unsupported.");
+            PRINT((LPCSTR)pErrors->GetBufferPointer());
+        }
+
+        return hr;
+    }
+}
 
 namespace SSAO
 {
@@ -39,6 +170,7 @@ namespace SSAO
     BoolVar DebugDraw("Graphics/SSAO/Debug Draw", false);
     BoolVar AsyncCompute("Graphics/SSAO/Async Compute", false);
     BoolVar ComputeLinearZ("Graphics/SSAO/Always Linearize Z", true);
+    BoolVar UseWorkgraph("Graphics/SSAO/Use Workgraph", true);
 
     // High quality (and better) is barely a noticeable improvement when modulated properly with ambient light.
     // However, in the debug view the quality improvement is very apparent.
@@ -80,8 +212,27 @@ namespace
     ComputePSO s_BlurUpsampleFinal[2] = { { L"SSAO: Blur Upsample Final Low Q. CS" }, { L"SSAO: Blur Upsample Final High Q. CS" } };	// Don't blend the result, just upsample it
     ComputePSO s_LinearizeDepthCS(L"SSAO: Linearize Depth CS");
     ComputePSO s_DebugSSAOCS(L"SSAO: Debug CS");
+    GWGPso s_AOGwG(L"SSAO: Workgraph");
 
     float SampleThickness[12];	// Pre-computed sample thicknesses
+
+    struct LocalRootArguments
+    {
+        // "RootConstants(b0, num32BitConstants = 4), "
+        // "CBV(b1), "
+        // "DescriptorTable(UAV(u0, numDescriptors = 5)),"
+        // "DescriptorTable(SRV(t0, numDescriptors = 5)),"
+
+        uint32_t RootConstants[4];
+        D3D12_GPU_VIRTUAL_ADDRESS CBV;
+        D3D12_GPU_DESCRIPTOR_HANDLE UAVTable;
+        D3D12_GPU_DESCRIPTOR_HANDLE SRVTable;
+    };
+
+    UploadBuffer s_GWGLocalRootArgumentsBuffer;
+    bool s_GWGLocalRootArgumentsBufferPendingInit = true;
+    static constexpr uint32_t MaxBufferedFrames = 3;
+    static constexpr uint32_t UniqueLcoalRootArgsSets = 2;
 }
 
 void SSAO::Initialize( void )
@@ -100,6 +251,28 @@ void SSAO::Initialize( void )
     ObjName.SetRootSignature(s_RootSignature); \
     ObjName.SetComputeShader(ShaderByteCode, sizeof(ShaderByteCode) ); \
     ObjName.Finalize();
+
+    std::vector<ComPtr<ID3DBlob>> LibBlobs;
+
+    DxcDefine defs[8];
+
+    defs[0] = { L"COMPILE_AOPREPAREDEPTHBUFFERS1CS", L"1" };
+    LibBlobs.emplace_back();
+    CompileDxilLibraryFromFile(L"AoGwG.hlsl", L"lib_6_8", defs, 1, &LibBlobs.back());
+    s_AOGwG.AddLibrary(L"Node1Lib", CD3DX12_SHADER_BYTECODE(LibBlobs.back().Get()));
+
+    defs[0] = { L"COMPILE_AOPREPAREDEPTHBUFFERS2CS", L"1" };
+    LibBlobs.emplace_back();
+    CompileDxilLibraryFromFile(L"AoGwG.hlsl", L"lib_6_8", defs, 1, &LibBlobs.back());
+    s_AOGwG.AddLibrary(L"Node2Lib", CD3DX12_SHADER_BYTECODE(LibBlobs.back().Get()));
+
+    s_AOGwG.AddLocalRootSignature(L"Node1Lib", L"localRS");
+
+    s_AOGwG.AddNodeToLocalRootSignatureAssociation(L"localRS", L"AoPrepareDepthBuffers1_Node");
+    s_AOGwG.AddNodeToLocalRootSignatureAssociation(L"localRS", L"AoPrepareDepthBuffers2_Node");
+    s_AOGwG.Finalize(L"AoPrepareDepthBuffers1_Node");
+
+    s_GWGLocalRootArgumentsBuffer.Create(L"GWGLocalRootArgs", MaxBufferedFrames * UniqueLcoalRootArgsSets * sizeof(LocalRootArguments));
 
     CreatePSO( s_DepthPrepare1CS, g_pAoPrepareDepthBuffers1CS );
     CreatePSO( s_DepthPrepare2CS, g_pAoPrepareDepthBuffers2CS );
@@ -372,6 +545,80 @@ void SSAO::Render( GraphicsContext& GfxContext, const float* ProjMat, float Near
     ComputeContext& Context = AsyncCompute ? ComputeContext::Begin(L"Async SSAO", true) : GfxContext.GetComputeContext();
     Context.SetRootSignature(s_RootSignature);
 
+    if (UseWorkgraph)
+    {
+        Context.TransitionResource(LinearDepth, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Context.TransitionResource(g_DepthDownsize1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Context.TransitionResource(g_DepthTiled1, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Context.TransitionResource(g_DepthDownsize2, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Context.TransitionResource(g_DepthTiled2, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Context.FlushResourceBarriers();
+
+        LocalRootArguments SSAOLocalRootArgs[UniqueLcoalRootArgsSets] = {};
+
+        D3D12_CPU_DESCRIPTOR_HANDLE DownsizeUAVs[5] = {
+            LinearDepth.GetUAV(), g_DepthDownsize1.GetUAV(), g_DepthTiled1.GetUAV(), g_DepthDownsize2.GetUAV(), g_DepthTiled2.GetUAV() };
+
+        SSAOLocalRootArgs[0].RootConstants[0] = DWParam(zMagic).Uint;
+        SSAOLocalRootArgs[0].SRVTable = Context.GetDynamicViewDescriptorHeap().UploadDirect(Depth.GetDepthSRV());
+        SSAOLocalRootArgs[0].UAVTable = Context.GetDynamicViewDescriptorHeap().UploadDirect(DownsizeUAVs, _countof(DownsizeUAVs));
+
+        SSAOLocalRootArgs[1].RootConstants[0] = DWParam(1.0f / g_DepthDownsize2.GetWidth()).Uint;
+        SSAOLocalRootArgs[1].RootConstants[1] = DWParam(1.0f / g_DepthDownsize2.GetHeight()).Uint;
+        SSAOLocalRootArgs[1].SRVTable = Context.GetDynamicViewDescriptorHeap().UploadDirect(g_DepthDownsize2.GetSRV());
+        D3D12_CPU_DESCRIPTOR_HANDLE DownsizeAgainUAVs[5] = {
+            g_DepthDownsize3.GetUAV(), g_DepthTiled3.GetUAV(), g_DepthDownsize4.GetUAV(), g_DepthTiled4.GetUAV(), g_DepthDownsize2.GetUAV() };
+        SSAOLocalRootArgs[1].UAVTable = Context.GetDynamicViewDescriptorHeap().UploadDirect(DownsizeAgainUAVs, _countof(DownsizeAgainUAVs));
+
+        auto EmptyRange = CD3DX12_RANGE(0, 0);
+        void* pLocalRootArgs;
+        ASSERT_SUCCEEDED(s_GWGLocalRootArgumentsBuffer->Map(0, &EmptyRange, &pLocalRootArgs));
+
+        uint32_t BufferFrameIndex = TemporalEffects::GetFrameIndex() % MaxBufferedFrames;
+
+        const SIZE_T FrameLocalRootArgsSize = UniqueLcoalRootArgsSets * sizeof(LocalRootArguments);
+        const SIZE_T FrameLocalRootArgsOffset = BufferFrameIndex * FrameLocalRootArgsSize;
+
+        memcpy(static_cast<uint8_t*>(pLocalRootArgs) + FrameLocalRootArgsOffset, SSAOLocalRootArgs, FrameLocalRootArgsSize);
+
+        auto WrittenRange = CD3DX12_RANGE(
+            FrameLocalRootArgsOffset,
+            (BufferFrameIndex + 1) * UniqueLcoalRootArgsSets * sizeof(LocalRootArguments));
+
+        s_GWGLocalRootArgumentsBuffer->Unmap(0, &WrittenRange);
+
+        ComPtr<ID3D12GraphicsCommandListExperimental> spCL;
+        ComPtr<ID3D12GraphicsCommandList>(Context.GetCommandList()).As(&spCL);
+
+        D3D12_SET_PROGRAM_DESC setProg = {};
+        setProg.Type = D3D12_PROGRAM_TYPE_WORK_GRAPH;
+        setProg.WorkGraph.ProgramIdentifier = s_AOGwG.GetWorkGraph();
+        setProg.WorkGraph.Flags = s_GWGLocalRootArgumentsBufferPendingInit ? D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE : D3D12_SET_WORK_GRAPH_FLAG_NONE;
+        setProg.WorkGraph.BackingMemory = s_AOGwG.GetBackingMemory();
+        setProg.WorkGraph.NodeLocalRootArgumentsTable.StartAddress = s_GWGLocalRootArgumentsBuffer->GetGPUVirtualAddress() + FrameLocalRootArgsOffset;
+        setProg.WorkGraph.NodeLocalRootArgumentsTable.SizeInBytes = FrameLocalRootArgsSize;
+        setProg.WorkGraph.NodeLocalRootArgumentsTable.StrideInBytes = sizeof(LocalRootArguments);
+        spCL->SetProgram(&setProg);
+
+        s_GWGLocalRootArgumentsBufferPendingInit = false;
+
+        // Generate graph inputs
+        struct EntryRecord
+        {
+            XMUINT2 gridSize; // : SV_DispatchGrid;
+        };
+        EntryRecord inputData[1] = { XMUINT2{ g_DepthTiled2.GetWidth(), g_DepthTiled2.GetHeight() } };
+
+        // Spawn work
+        D3D12_DISPATCH_GRAPH_DESC DSDesc = {};
+        DSDesc.Mode = D3D12_DISPATCH_MODE_NODE_CPU_INPUT;
+        DSDesc.NodeCPUInput.EntrypointIndex = 0;
+        DSDesc.NodeCPUInput.NumRecords = 1;
+        DSDesc.NodeCPUInput.RecordStrideInBytes = sizeof(EntryRecord);
+        DSDesc.NodeCPUInput.pRecords = inputData;
+        spCL->DispatchGraph(&DSDesc);
+
+    } else {
     { ScopedTimer _prof(L"Decompress and downsample", Context);
 
     // Phase 1:  Decompress, linearize, downsample, and deinterleave the depth buffer
@@ -406,6 +653,7 @@ void SSAO::Render( GraphicsContext& GfxContext, const float* ProjMat, float Near
     }
 
     } // End decompress
+    } // !GWG
     { ScopedTimer _prof(L"Analyze depth volumes", Context);
 
     // Load first element of projection matrix which is the cotangent of the horizontal FOV divided by 2.

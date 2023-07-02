@@ -30,4 +30,5 @@ namespace SSAO
     extern BoolVar DebugDraw;
     extern BoolVar AsyncCompute;
     extern BoolVar ComputeLinearZ;
+    extern BoolVar UseWorkgraph;
 }
