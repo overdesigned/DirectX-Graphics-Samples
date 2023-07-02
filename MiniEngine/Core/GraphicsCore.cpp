@@ -236,7 +236,10 @@ void Graphics::Initialize(bool RequireDXRSupport)
     }
 
     // Temporary workaround because SetStablePowerState() is crashing
-    D3D12EnableExperimentalFeatures(0, nullptr, nullptr, nullptr);
+    // D3D12EnableExperimentalFeatures(0, nullptr, nullptr, nullptr);
+
+    UUID Features[2] = { D3D12ExperimentalShaderModels,D3D12StateObjectsExperiment };
+    ASSERT_SUCCEEDED(D3D12EnableExperimentalFeatures(_countof(Features), Features, nullptr, nullptr));
 
     if (!bUseWarpDriver)
     {
